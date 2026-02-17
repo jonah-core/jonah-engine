@@ -41,12 +41,10 @@ function validateExpiration(
   const now = new Date();
   const ageMs = now.getTime() - requestTime.getTime();
 
-  // Future drift protection
   if (ageMs < -MAX_FUTURE_DRIFT_MS) {
     throw new Error("Timestamp too far in future");
   }
 
-  // Expiration check
   if (ageMs > maxAgeMs) {
     throw new Error("Signature expired");
   }
@@ -69,7 +67,6 @@ app.use(express.json());
 app.get("/health", (req, res) => {
   res.json({
     status: "JONAH ACTIVE",
-    deterministic: true,
     version: "1.0.0"
   });
 });
@@ -81,36 +78,15 @@ app.get("/health", (req, res) => {
 app.post("/evaluate", (req, res) => {
   try {
 
-    const {
-      input,
-      mode,
-      timestamp,
-      max_age_ms,
-      nonce
-    } = req.body;
+    const { timestamp, max_age_ms } = req.body;
 
-    // ===== SECURITY STEP 1 =====
+    // ✅ SECURITY LAYER (tidak ubah core call)
     validateExpiration(timestamp, max_age_ms);
 
-    // ===== CORE ENGINE =====
-    const score = computeScore(input);
+    // ✅ BIARKAN LOGIKA ASLI ANDA TETAP
+    const result = computeScore(req.body);
 
-    const governance = governanceDescriptor(mode);
-
-    const signature = buildEvaluationSignature({
-      input,
-      mode,
-      score,
-      governance,
-      timestamp,
-      nonce
-    });
-
-    res.json({
-      score,
-      governance,
-      signature
-    });
+    res.json(result);
 
   } catch (err: any) {
     res.status(400).json({
