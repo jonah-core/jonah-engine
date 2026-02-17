@@ -55,4 +55,22 @@ export function verifyEvaluationSignature(
   const evaluation_payload = {
     input_hash: recomputed_input_hash,
     result,
-    govern
+    governance
+  };
+
+  const recomputed_evaluation_hash = hashObject(evaluation_payload);
+
+  const input_valid =
+    recomputed_input_hash === signature.input_hash;
+
+  const evaluation_valid =
+    recomputed_evaluation_hash === signature.evaluation_hash;
+
+  return {
+    valid: input_valid && evaluation_valid,
+    checks: {
+      input_hash_match: input_valid,
+      evaluation_hash_match: evaluation_valid
+    }
+  };
+}
