@@ -1,42 +1,67 @@
 import express from "express";
-import { computeScore } from "./core/kernel";
+import cors from "cors";
+import { evaluate } from "./core/evaluator";
+import { governanceDescriptor } from "./core/governance";
+import { buildEvaluationSignature } from "./core/audit";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
+app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("JONAH ENGINE ONLINE");
+/**
+ * Health Endpoint
+ */
+app.get("/health", (req, res) => {
+  res.json({
+    status: "OK",
+    engine: "JONAH_CORE",
+    timestamp: new Date().toISOString()
+  });
 });
 
 /**
- * POST /api/v1/evaluate
- * Deterministic Rational Evaluation Endpoint
+ * Governance Metadata Endpoint
+ */
+app.get("/api/v1/governance", (req, res) => {
+  res.json(governanceDescriptor());
+});
+
+/**
+ * Core Evaluation Endpoint
  */
 app.post("/api/v1/evaluate", (req, res) => {
   try {
-    const { epistemic, structural, risk, ethical } = req.body;
+    const input = req.body;
 
-    const result = computeScore({
-      epistemic,
-      structural,
-      risk,
-      ethical,
-    });
+    const result = evaluate(input);
+    const governance = governanceDescriptor();
+
+    const signature = buildEvaluationSignature(
+      input,
+      result,
+      governance
+    );
 
     res.json({
-      version: "1.0.0",
-      deterministic: true,
-      result,
+      governance,
+      signature,
+      result
     });
+
   } catch (error) {
-    res.status(400).json({
-      error: "Invalid input format",
+    res.status(500).json({
+      error: "Evaluation failed",
+      deterministic: false
     });
   }
 });
 
+/**
+ * Server Boot
+ */
+const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`JONAH Core running on port ${PORT}`);
 });
