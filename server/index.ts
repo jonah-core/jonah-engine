@@ -17,7 +17,6 @@ app.use(express.json());
 /* =========================
    HEALTH
 ========================= */
-
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
@@ -29,5 +28,44 @@ app.get("/health", (req, res) => {
 /* =========================
    GOVERNANCE
 ========================= */
+app.get("/api/v1/governance", (req, res) => {
+  const governance = governanceDescriptor();
+  res.json(governance);
+});
 
-app.get("/api/v1/governance", (req,
+/* =========================
+   EVALUATE
+========================= */
+app.post("/api/v1/evaluate", (req, res) => {
+  try {
+    const input = req.body;
+
+    const result = computeScore(input);
+    const governance = governanceDescriptor();
+    const signature = buildEvaluationSignature(
+      input,
+      result,
+      governance
+    );
+
+    res.json({
+      governance,
+      signature,
+      result
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: "Evaluation failed"
+    });
+  }
+});
+
+/* =========================
+   VERIFY
+========================= */
+app.post("/api/v1/verify", (req, res) => {
+  try {
+    const { input, result, governance, signature } = req.body;
+
+    const verification = verifyEvaluationSignature(
