@@ -1,92 +1,95 @@
 import crypto from "crypto";
 
-/*
-|--------------------------------------------------------------------------
-| HASH UTILITY
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+   ENV KEY PARSER
+============================================================ */
 
-export function hashObject(obj: any): string {
-  const normalized = JSON.stringify(obj, Object.keys(obj).sort());
-  return crypto.createHash("sha256").update(normalized).digest("hex");
-}
+function parseJonahKeys(): Record<string, string> {
+  const raw = process.env.JONAH_KEYS || "";
+  const pairs = raw.split(",").map(k => k.trim()).filter(Boolean);
 
-export function hmacSign(payload: string, secret: string): string {
-  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
-}
+  const map: Record<string, string> = {};
 
-/*
-|--------------------------------------------------------------------------
-| KEY REGISTRY (MULTI KEY SUPPORT)
-|--------------------------------------------------------------------------
-|
-| ENV FORMAT:
-| JONAH_ACTIVE_KEY_ID = k1
-| JONAH_KEYS = k1:secret1,k2:secret2
-|
-*/
-
-function loadKeyRegistry() {
-  const keysRaw = process.env.JONAH_KEYS || "";
-  const activeKeyId = process.env.JONAH_ACTIVE_KEY_ID || "";
-
-  const registry = keysRaw.split(",").reduce((acc: any, pair) => {
+  for (const pair of pairs) {
     const [id, secret] = pair.split(":");
     if (id && secret) {
-      acc[id.trim()] = secret.trim();
+      map[id.trim()] = secret.trim();
     }
-    return acc;
-  }, {});
-
-  if (!activeKeyId || !registry[activeKeyId]) {
-    throw new Error("JONAH active key not configured properly");
   }
 
-  return {
-    activeKeyId,
-    registry
-  };
+  return map;
 }
 
-/*
-|--------------------------------------------------------------------------
-| BUILD SIGNATURE
-|--------------------------------------------------------------------------
-*/
+function getActiveKey() {
+  const activeKeyId = process.env.JONAH_ACTIVE_KEY_ID;
+  const keys = parseJonahKeys();
+
+  if (!activeKeyId) {
+    throw new Error("JONAH_ACTIVE_KEY_ID not defined");
+  }
+
+  const secret = keys[activeKeyId];
+
+  if (!secret) {
+    throw new Error(`Active key '${activeKeyId}' not found in JONAH_KEYS`);
+  }
+
+  return { activeKeyId, secret };
+}
+
+/* ============================================================
+   HASH + HMAC
+============================================================ */
+
+export function hashObject(obj: any): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(obj))
+    .digest("hex");
+}
+
+export function hmacSign(data: string, secret: string): string {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(data)
+    .digest("hex");
+}
+
+/* ============================================================
+   BUILD SIGNATURE (UPDATED WITH key_id)
+============================================================ */
 
 export function buildEvaluationSignature(
   input: any,
   result: any,
   governance: any
 ) {
-  const { activeKeyId, registry } = loadKeyRegistry();
-  const secret = registry[activeKeyId];
+  const { activeKeyId, secret } = getActiveKey();
 
   const input_hash = hashObject(input);
 
   const evaluation_payload = {
     input_hash,
     result,
-    governance
+    governance,
   };
 
   const evaluation_hash = hashObject(evaluation_payload);
+
   const hmac = hmacSign(evaluation_hash, secret);
 
   return {
     key_id: activeKeyId,
+    timestamp: new Date().toISOString(),
     input_hash,
     evaluation_hash,
     hmac,
-    timestamp: new Date().toISOString()
   };
 }
 
-/*
-|--------------------------------------------------------------------------
-| VERIFY SIGNATURE
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+   VERIFY SIGNATURE (MULTI KEY SUPPORT)
+============================================================ */
 
 export function verifyEvaluationSignature(
   input: any,
@@ -94,33 +97,38 @@ export function verifyEvaluationSignature(
   governance: any,
   signature: any
 ) {
-  const { registry } = loadKeyRegistry();
+  const keys = parseJonahKeys();
 
-  const keyId = signature?.key_id;
-  const secret = registry[keyId];
+  const keyExists = !!keys[signature.key_id];
 
-  if (!secret) {
+  if (!keyExists) {
     return {
       valid: false,
       checks: {
         key_exists: false,
         input_hash_match: false,
         evaluation_hash_match: false,
-        hmac_match: false
-      }
+        hmac_match: false,
+      },
     };
   }
+
+  const secret = keys[signature.key_id];
 
   const recomputed_input_hash = hashObject(input);
 
   const evaluation_payload = {
     input_hash: recomputed_input_hash,
     result,
-    governance
+    governance,
   };
 
   const recomputed_evaluation_hash = hashObject(evaluation_payload);
-  const recomputed_hmac = hmacSign(recomputed_evaluation_hash, secret);
+
+  const recomputed_hmac = hmacSign(
+    recomputed_evaluation_hash,
+    secret
+  );
 
   const input_hash_match =
     recomputed_input_hash === signature.input_hash;
@@ -132,12 +140,16 @@ export function verifyEvaluationSignature(
     recomputed_hmac === signature.hmac;
 
   return {
-    valid: input_hash_match && evaluation_hash_match && hmac_match,
+    valid:
+      keyExists &&
+      input_hash_match &&
+      evaluation_hash_match &&
+      hmac_match,
     checks: {
-      key_exists: true,
+      key_exists: keyExists,
       input_hash_match,
       evaluation_hash_match,
-      hmac_match
-    }
+      hmac_match,
+    },
   };
 }
