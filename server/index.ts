@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { evaluate } from "./core/evaluator";
+import { evaluateKernel } from "./core/kernel";
 import { governanceDescriptor } from "./core/governance";
 import { buildEvaluationSignature } from "./core/audit";
 
@@ -9,9 +9,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/**
- * Health Endpoint
- */
+/* =========================
+   HEALTH
+========================= */
+
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
@@ -20,21 +21,23 @@ app.get("/health", (req, res) => {
   });
 });
 
-/**
- * Governance Metadata Endpoint
- */
+/* =========================
+   GOVERNANCE
+========================= */
+
 app.get("/api/v1/governance", (req, res) => {
   res.json(governanceDescriptor());
 });
 
-/**
- * Core Evaluation Endpoint
- */
+/* =========================
+   EVALUATE
+========================= */
+
 app.post("/api/v1/evaluate", (req, res) => {
   try {
     const input = req.body;
 
-    const result = evaluate(input);
+    const result = evaluateKernel(input);
     const governance = governanceDescriptor();
 
     const signature = buildEvaluationSignature(
@@ -51,16 +54,16 @@ app.post("/api/v1/evaluate", (req, res) => {
 
   } catch (error) {
     res.status(500).json({
-      error: "Evaluation failed",
-      deterministic: false
+      error: "Evaluation failed"
     });
   }
 });
 
-/**
- * Server Boot
- */
-const PORT = process.env.PORT || 3000;
+/* =========================
+   START
+========================= */
+
+const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
   console.log(`JONAH Core running on port ${PORT}`);
