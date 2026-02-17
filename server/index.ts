@@ -1,14 +1,8 @@
 import express from "express";
 import cors from "cors";
-import crypto from "crypto";
 import Redis from "ioredis";
 
-import { computeScore } from "./core/kernel";
-import { governanceDescriptor } from "./core/governance";
-import {
-  buildEvaluationSignature,
-  verifyEvaluationSignature
-} from "./core/audit";
+import { computeScore, EvaluationInput } from "./core/kernel";
 
 /* =========================
    CONFIG
@@ -17,7 +11,6 @@ import {
 const MAX_ALLOWED_AGE_MS = 60000;
 const MAX_FUTURE_DRIFT_MS = 5000;
 
-const HMAC_SECRET = process.env.JONAH_SECRET || "dev_secret";
 const REDIS_URL = process.env.REDIS_URL || "";
 
 const redis = new Redis(REDIS_URL);
@@ -101,53 +94,3 @@ app.get("/health", async (_req, res) => {
       redis: redisStatus === "PONG",
       replay_protection: true,
       version: "1.2.0"
-    });
-
-  } catch {
-    res.json({
-      status: "JONAH ACTIVE",
-      redis: false,
-      replay_protection: false,
-      version: "1.2.0"
-    });
-  }
-});
-
-/* =========================
-   EVALUATE
-========================= */
-
-app.post("/evaluate", async (req, res) => {
-  try {
-
-    const {
-      timestamp,
-      max_age_ms,
-      nonce
-    } = req.body;
-
-    // 1️⃣ Expiration
-    validateExpiration(timestamp, max_age_ms);
-
-    // 2️⃣ Replay block
-    await validateAndStoreNonce(nonce, max_age_ms);
-
-    // 3️⃣ ORIGINAL ENGINE FLOW (tidak diubah)
-    const result = computeScore();
-
-    res.json(result);
-
-  } catch (err: any) {
-    res.status(400).json({
-      error: err.message
-    });
-  }
-});
-
-/* =========================
-   START
-========================= */
-
-app.listen(PORT, () => {
-  console.log(`JONAH Engine running on port ${PORT}`);
-});
