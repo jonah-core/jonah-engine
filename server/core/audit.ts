@@ -1,5 +1,9 @@
 import crypto from "crypto";
 
+/* =========================
+   HASH UTILITY
+========================= */
+
 export function hashObject(data: any): string {
   const json = JSON.stringify(data);
   return crypto.createHash("sha256").update(json).digest("hex");
@@ -8,6 +12,10 @@ export function hashObject(data: any): string {
 export function generateTraceId(): string {
   return crypto.randomUUID();
 }
+
+/* =========================
+   SIGNATURE BUILDER
+========================= */
 
 export function buildEvaluationSignature(
   input: any,
@@ -31,3 +39,20 @@ export function buildEvaluationSignature(
     evaluation_hash
   };
 }
+
+/* =========================
+   SIGNATURE VERIFIER
+========================= */
+
+export function verifyEvaluationSignature(
+  input: any,
+  result: any,
+  governance: any,
+  signature: any
+) {
+  const recomputed_input_hash = hashObject(input);
+
+  const evaluation_payload = {
+    input_hash: recomputed_input_hash,
+    result,
+    govern
