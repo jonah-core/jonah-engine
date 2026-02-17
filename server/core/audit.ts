@@ -1,43 +1,13 @@
 import crypto from "crypto";
 
-/*
-========================================
-JONAH CORE — AUDIT + CRYPTO SIGNING
-========================================
-Deterministic hashing + HMAC signing
-*/
-
-const SECRET_KEY = process.env.JONAH_SECRET || "JONAH_DEV_SECRET";
-
-/*
-========================================
-UTILS
-========================================
-*/
-
-function stableStringify(obj: any): string {
-  return JSON.stringify(sortObject(obj));
-}
-
-function sortObject(obj: any): any {
-  if (Array.isArray(obj)) {
-    return obj.map(sortObject);
-  }
-  if (obj !== null && typeof obj === "object") {
-    return Object.keys(obj)
-      .sort()
-      .reduce((acc: any, key) => {
-        acc[key] = sortObject(obj[key]);
-        return acc;
-      }, {});
-  }
-  return obj;
-}
+/* =========================
+   HASH UTIL
+========================= */
 
 export function hashObject(obj: any): string {
   return crypto
     .createHash("sha256")
-    .update(stableStringify(obj))
+    .update(JSON.stringify(obj))
     .digest("hex");
 }
 
@@ -45,24 +15,9 @@ export function generateTraceId(): string {
   return crypto.randomUUID();
 }
 
-/*
-========================================
-HMAC SIGNER
-========================================
-*/
-
-function signPayload(payload: any): string {
-  return crypto
-    .createHmac("sha256", SECRET_KEY)
-    .update(stableStringify(payload))
-    .digest("hex");
-}
-
-/*
-========================================
-SIGNATURE BUILDER
-========================================
-*/
+/* =========================
+   SIGNATURE BUILDER
+========================= */
 
 export function buildEvaluationSignature(
   input: any,
@@ -77,4 +32,72 @@ export function buildEvaluationSignature(
     governance
   };
 
-  const evaluation_hash = hashOb_
+  const evaluation_hash = hashObject(evaluation_payload);
+
+  const signaturePayload = {
+    trace_id: generateTraceId(),
+    timestamp: new Date().toISOString(),
+    input_hash,
+    evaluation_hash
+  };
+
+  const secret = process.env.JONAH_SECRET || "";
+
+  const hmac = crypto
+    .createHmac("sha256", secret)
+    .update(JSON.stringify(signaturePayload))
+    .digest("hex");
+
+  return {
+    ...signaturePayload,
+    hmac
+  };
+}
+
+/* =========================
+   SIGNATURE VERIFIER
+========================= */
+
+export function verifyEvaluationSignature(
+  input: any,
+  result: any,
+  governance: any,
+  signature: any
+) {
+  const recomputed_input_hash = hashObject(input);
+
+  const recomputed_evaluation_hash = hashObject({
+    input_hash: recomputed_input_hash,
+    result,
+    governance
+  });
+
+  const secret = process.env.JONAH_SECRET || "";
+
+  const recomputed_hmac = crypto
+    .createHmac("sha256", secret)
+    .update(
+      JSON.stringify({
+        trace_id: signature.trace_id,
+        timestamp: signature.timestamp,
+        input_hash: recomputed_input_hash,
+        evaluation_hash: recomputed_evaluation_hash
+      })
+    )
+    .digest("hex");
+
+  return {
+    valid:
+      recomputed_input_hash === signature.input_hash &&
+      recomputed_evaluation_hash === signature.evaluation_hash &&
+      recomputed_hmac === signature.hmac,
+    checks: {
+      input_hash_match:
+        recomputed_input_hash === signature.input_hash,
+      evaluation_hash_match:
+        recomputed_evaluation_hash === signature.evaluation_hash,
+      hmac_match:
+        recomputed_hmac === signature.hmac
+    }
+  };
+}
