@@ -94,3 +94,64 @@ app.get("/health", async (_req, res) => {
       redis: redisStatus === "PONG",
       replay_protection: true,
       version: "1.2.0"
+    });
+
+  } catch {
+    res.json({
+      status: "JONAH ACTIVE",
+      redis: false,
+      replay_protection: false,
+      version: "1.2.0"
+    });
+  }
+});
+
+/* =========================
+   EVALUATE
+========================= */
+
+app.post("/evaluate", async (req, res) => {
+  try {
+
+    const {
+      epistemic,
+      structural,
+      risk,
+      ethical,
+      timestamp,
+      max_age_ms,
+      nonce
+    } = req.body;
+
+    // 1️⃣ Expiration
+    validateExpiration(timestamp, max_age_ms);
+
+    // 2️⃣ Replay block
+    await validateAndStoreNonce(nonce, max_age_ms);
+
+    // 3️⃣ Deterministic kernel input
+    const input: EvaluationInput = {
+      epistemic,
+      structural,
+      risk,
+      ethical
+    };
+
+    const result = computeScore(input);
+
+    res.json(result);
+
+  } catch (err: any) {
+    res.status(400).json({
+      error: err.message
+    });
+  }
+});
+
+/* =========================
+   START
+========================= */
+
+app.listen(PORT, () => {
+  console.log(`JONAH Engine running on port ${PORT}`);
+});
