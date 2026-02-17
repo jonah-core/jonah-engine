@@ -1,11 +1,34 @@
 import crypto from "crypto";
 
 /* =========================
+   CANONICAL JSON SORTER
+========================= */
+
+function canonicalize(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map(canonicalize);
+  }
+
+  if (obj !== null && typeof obj === "object") {
+    const sorted: any = {};
+    Object.keys(obj)
+      .sort()
+      .forEach((key) => {
+        sorted[key] = canonicalize(obj[key]);
+      });
+    return sorted;
+  }
+
+  return obj;
+}
+
+/* =========================
    HASH UTILITY
 ========================= */
 
 export function hashObject(data: any): string {
-  const json = JSON.stringify(data);
+  const canonical = canonicalize(data);
+  const json = JSON.stringify(canonical);
   return crypto.createHash("sha256").update(json).digest("hex");
 }
 
