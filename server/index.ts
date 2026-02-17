@@ -3,10 +3,7 @@ import cors from "cors";
 
 import { computeScore } from "./core/kernel";
 import { governanceDescriptor } from "./core/governance";
-import {
-  buildEvaluationSignature,
-  verifyEvaluationSignature
-} from "./core/audit";
+import { buildEvaluationSignature, verifyEvaluationSignature } from "./core/audit";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -14,9 +11,7 @@ const PORT = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   HEALTH
-========================= */
+/* HEALTH */
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
@@ -25,47 +20,54 @@ app.get("/health", (req, res) => {
   });
 });
 
-/* =========================
-   GOVERNANCE
-========================= */
+/* GOVERNANCE */
 app.get("/api/v1/governance", (req, res) => {
-  const governance = governanceDescriptor();
-  res.json(governance);
+  res.json(governanceDescriptor());
 });
 
-/* =========================
-   EVALUATE
-========================= */
+/* EVALUATE */
 app.post("/api/v1/evaluate", (req, res) => {
   try {
     const input = req.body;
 
     const result = computeScore(input);
     const governance = governanceDescriptor();
-    const signature = buildEvaluationSignature(
-      input,
-      result,
-      governance
-    );
+    const signature = buildEvaluationSignature(input, result, governance);
 
     res.json({
-      governance,
-      signature,
-      result
+      governance: governance,
+      signature: signature,
+      result: result
     });
 
-  } catch (error) {
+  } catch (err) {
     res.status(500).json({
       error: "Evaluation failed"
     });
   }
 });
 
-/* =========================
-   VERIFY
-========================= */
+/* VERIFY */
 app.post("/api/v1/verify", (req, res) => {
   try {
-    const { input, result, governance, signature } = req.body;
+    const body = req.body;
 
     const verification = verifyEvaluationSignature(
+      body.input,
+      body.result,
+      body.governance,
+      body.signature
+    );
+
+    res.json(verification);
+
+  } catch (err) {
+    res.status(500).json({
+      error: "Verification failed"
+    });
+  }
+});
+
+app.listen(PORT, function () {
+  console.log("JONAH Core running on port " + PORT);
+});
