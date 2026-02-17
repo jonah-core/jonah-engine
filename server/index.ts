@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { evaluateKernel } from "./core/kernel";
+import { computeScore } from "./core/kernel";
 import { governanceDescriptor } from "./core/governance";
 import { buildEvaluationSignature } from "./core/audit";
 
@@ -37,7 +37,7 @@ app.post("/api/v1/evaluate", (req, res) => {
   try {
     const input = req.body;
 
-    const result = evaluateKernel(input);
+    const result = computeScore(input);
     const governance = governanceDescriptor();
 
     const signature = buildEvaluationSignature(
