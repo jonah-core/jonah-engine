@@ -11,8 +11,10 @@ import { computeScore, EvaluationInput } from "./core/kernel";
 const MAX_ALLOWED_AGE_MS = 60000;
 const MAX_FUTURE_DRIFT_MS = 5000;
 
-const REDIS_URL = process.env.REDIS_URL || "";
+const RATE_LIMIT_WINDOW_MS = 60000; // 60 detik
+const RATE_LIMIT_MAX = 60;          // 60 request per window
 
+const REDIS_URL = process.env.REDIS_URL || "";
 const redis = new Redis(REDIS_URL);
 
 /* =========================
@@ -72,6 +74,25 @@ async function validateAndStoreNonce(
 }
 
 /* =========================
+   RATE LIMITING (Redis)
+========================= */
+
+async function enforceRateLimit(ip: string): Promise<void> {
+
+  const key = `ratelimit:${ip}`;
+
+  const count = await redis.incr(key);
+
+  if (count === 1) {
+    await redis.pexpire(key, RATE_LIMIT_WINDOW_MS);
+  }
+
+  if (count > RATE_LIMIT_MAX) {
+    throw new Error("Rate limit exceeded");
+  }
+}
+
+/* =========================
    APP INIT
 ========================= */
 
@@ -93,7 +114,8 @@ app.get("/health", async (_req, res) => {
       status: "JONAH ACTIVE",
       redis: redisStatus === "PONG",
       replay_protection: true,
-      version: "1.2.0"
+      rate_limit: true,
+      version: "1.3.0"
     });
 
   } catch {
@@ -101,7 +123,8 @@ app.get("/health", async (_req, res) => {
       status: "JONAH ACTIVE",
       redis: false,
       replay_protection: false,
-      version: "1.2.0"
+      rate_limit: false,
+      version: "1.3.0"
     });
   }
 });
@@ -113,6 +136,14 @@ app.get("/health", async (_req, res) => {
 app.post("/evaluate", async (req, res) => {
   try {
 
+    const clientIp =
+      req.headers["x-forwarded-for"]?.toString().split(",")[0] ||
+      req.socket.remoteAddress ||
+      "unknown";
+
+    // 1️⃣ Rate limit
+    await enforceRateLimit(clientIp);
+
     const {
       epistemic,
       structural,
@@ -123,35 +154,5 @@ app.post("/evaluate", async (req, res) => {
       nonce
     } = req.body;
 
-    // 1️⃣ Expiration
-    validateExpiration(timestamp, max_age_ms);
-
-    // 2️⃣ Replay block
-    await validateAndStoreNonce(nonce, max_age_ms);
-
-    // 3️⃣ Deterministic kernel input
-    const input: EvaluationInput = {
-      epistemic,
-      structural,
-      risk,
-      ethical
-    };
-
-    const result = computeScore(input);
-
-    res.json(result);
-
-  } catch (err: any) {
-    res.status(400).json({
-      error: err.message
-    });
-  }
-});
-
-/* =========================
-   START
-========================= */
-
-app.listen(PORT, () => {
-  console.log(`JONAH Engine running on port ${PORT}`);
-});
+    // 2️⃣ Expiration
+    validateExpirat
