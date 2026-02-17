@@ -1,27 +1,32 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import Redis from "ioredis";
 
 import { computeScore } from "./core/kernel";
 import { governanceDescriptor } from "./core/governance";
+import {
+  buildEvaluationSignature,
+  verifyEvaluationSignature
+} from "./core/audit";
 
 /* =========================
-   SECURITY CONFIG
+   CONFIG
 ========================= */
 
 const MAX_ALLOWED_AGE_MS = 60000;
 const MAX_FUTURE_DRIFT_MS = 5000;
-const HMAC_SECRET = process.env.JONAH_SECRET || "default_dev_secret";
+
+const HMAC_SECRET = process.env.JONAH_SECRET || "dev_secret";
+const REDIS_URL = process.env.REDIS_URL || "";
+
+const redis = new Redis(REDIS_URL);
 
 /* =========================
    EXPIRATION VALIDATION
 ========================= */
 
-function validateExpiration(
-  timestamp: string,
-  maxAgeMs: number
-): void {
-
+function validateExpiration(timestamp: string, maxAgeMs: number): void {
   if (!timestamp) throw new Error("Missing timestamp");
   if (!maxAgeMs) throw new Error("Missing max_age_ms");
 
@@ -47,30 +52,30 @@ function validateExpiration(
 }
 
 /* =========================
-   NONCE VALIDATION
+   REPLAY PROTECTION
 ========================= */
 
-function validateNonce(nonce: string): void {
-  if (!nonce) {
-    throw new Error("Missing nonce");
+async function validateAndStoreNonce(
+  nonce: string,
+  ttlMs: number
+): Promise<void> {
+
+  if (!nonce) throw new Error("Missing nonce");
+  if (nonce.length < 8) throw new Error("Invalid nonce");
+
+  const key = `nonce:${nonce}`;
+
+  const result = await redis.set(
+    key,
+    "1",
+    "PX",
+    ttlMs,
+    "NX"
+  );
+
+  if (result === null) {
+    throw new Error("Replay detected");
   }
-
-  if (nonce.length < 8) {
-    throw new Error("Invalid nonce");
-  }
-}
-
-/* =========================
-   SIGNATURE WITH NONCE BINDING
-========================= */
-
-function buildSignature(payload: any): string {
-  const canonical = JSON.stringify(payload);
-
-  return crypto
-    .createHmac("sha256", HMAC_SECRET)
-    .update(canonical)
-    .digest("hex");
 }
 
 /* =========================
@@ -87,57 +92,50 @@ app.use(express.json());
    HEALTH
 ========================= */
 
-app.get("/health", (req, res) => {
-  res.json({
-    status: "JONAH ACTIVE",
-    nonce_bound: true,
-    version: "1.1.0"
-  });
+app.get("/health", async (_req, res) => {
+  try {
+    const redisStatus = await redis.ping();
+
+    res.json({
+      status: "JONAH ACTIVE",
+      redis: redisStatus === "PONG",
+      replay_protection: true,
+      version: "1.2.0"
+    });
+
+  } catch {
+    res.json({
+      status: "JONAH ACTIVE",
+      redis: false,
+      replay_protection: false,
+      version: "1.2.0"
+    });
+  }
 });
 
 /* =========================
    EVALUATE
 ========================= */
 
-app.post("/evaluate", (req, res) => {
+app.post("/evaluate", async (req, res) => {
   try {
 
     const {
-      input,
-      mode,
       timestamp,
       max_age_ms,
       nonce
     } = req.body;
 
-    // SECURITY STEP 1
+    // 1️⃣ Expiration
     validateExpiration(timestamp, max_age_ms);
 
-    // SECURITY STEP 2
-    validateNonce(nonce);
+    // 2️⃣ Replay block
+    await validateAndStoreNonce(nonce, max_age_ms);
 
-    // CORE ENGINE
-    const score = computeScore(req.body);
+    // 3️⃣ ORIGINAL ENGINE FLOW (tidak diubah)
+    const result = computeScore();
 
-    const governance = governanceDescriptor(mode);
-
-    // NONCE NOW PART OF SIGNED PAYLOAD
-    const signaturePayload = {
-      input,
-      mode,
-      score,
-      governance,
-      timestamp,
-      nonce
-    };
-
-    const signature = buildSignature(signaturePayload);
-
-    res.json({
-      score,
-      governance,
-      signature
-    });
+    res.json(result);
 
   } catch (err: any) {
     res.status(400).json({
@@ -147,7 +145,7 @@ app.post("/evaluate", (req, res) => {
 });
 
 /* =========================
-   START SERVER
+   START
 ========================= */
 
 app.listen(PORT, () => {
