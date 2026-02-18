@@ -8,10 +8,6 @@ import { computeScore, EvaluationInput } from "./core/kernel";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-/* ==============================
-   MIDDLEWARE
-============================== */
-
 app.use(cors());
 app.use(express.json());
 
@@ -19,11 +15,7 @@ app.use(express.json());
    REDIS
 ============================== */
 
-if (!process.env.REDIS_URL) {
-  throw new Error("REDIS_URL not configured");
-}
-
-const redis = new Redis(process.env.REDIS_URL);
+const redis = new Redis(process.env.REDIS_URL || "");
 
 /* ==============================
    CONSTANTS
@@ -94,22 +86,44 @@ function sha256(data: string): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-function verifyHmacSignature(body: any, signature: string) {
-  if (!process.env.JONAH_SECRET) {
-    throw new Error("JONAH_SECRET not configured");
+/* ==============================
+   HMAC VERIFICATION (FINAL)
+============================== */
+
+function verifyHmacSignature(req: any, rawBody: string) {
+  const activeKeyId = process.env.JONAH_ACTIVE_KEY_ID;
+  const keysRaw = process.env.JONAH_KEYS;
+
+  if (!activeKeyId || !keysRaw) {
+    throw new Error("HMAC configuration missing");
   }
 
-  const json = JSON.stringify(body);
+  const keys = JSON.parse(keysRaw);
+  const secret = keys[activeKeyId];
 
-  const expected = crypto
-    .createHmac("sha256", process.env.JONAH_SECRET)
-    .update(json)
+  if (!secret) {
+    throw new Error("Active key not found");
+  }
+
+  const signature = req.get("x-jonah-signature");
+
+  if (!signature) {
+    throw new Error("Missing HMAC signature");
+  }
+
+  const computed = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
     .digest("hex");
 
-  if (expected !== signature) {
+  if (computed !== signature) {
     throw new Error("Invalid HMAC signature");
   }
 }
+
+/* ==============================
+   AUDIT LOG CHAIN
+============================== */
 
 async function writeAuditLog(payload: any, result: any) {
   const id = uuidv4();
@@ -145,7 +159,7 @@ async function writeAuditLog(payload: any, result: any) {
    HEALTH
 ============================== */
 
-app.get("/health", async (_req, res) => {
+app.get("/health", (_req, res) => {
   res.json({
     status: "JONAH ACTIVE",
     redis: redis.status === "ready",
@@ -153,7 +167,7 @@ app.get("/health", async (_req, res) => {
     rate_limit: true,
     audit_chain: true,
     hmac_enabled: true,
-    version: "2.1.0"
+    version: "2.0.0"
   });
 });
 
@@ -163,14 +177,10 @@ app.get("/health", async (_req, res) => {
 
 app.post("/evaluate", async (req, res) => {
   try {
-    const signature =
-      req.headers["x-jonah-signature"] as string;
+    const rawBody = JSON.stringify(req.body);
 
-    if (!signature) {
-      throw new Error("Missing HMAC signature");
-    }
-
-    verifyHmacSignature(req.body, signature);
+    // 🔐 VERIFY HMAC FIRST
+    verifyHmacSignature(req, rawBody);
 
     const {
       epistemic,
@@ -198,15 +208,14 @@ app.post("/evaluate", async (req, res) => {
     await writeAuditLog(req.body, result);
 
     res.json(result);
+
   } catch (err: any) {
-    res.status(400).json({
-      error: err.message || "Internal error"
-    });
+    res.status(400).json({ error: err.message });
   }
 });
 
 /* ==============================
-   START
+   START SERVER
 ============================== */
 
 app.listen(PORT, () => {
