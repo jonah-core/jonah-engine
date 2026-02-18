@@ -1,39 +1,46 @@
-// server/core/security.ts
+export interface JonahKeyStore {
+  [keyId: string]: string;
+}
 
-const MAX_ALLOWED_AGE_MS = 60000;
-const MAX_FUTURE_DRIFT_MS = 5000;
-
-export function validateExpiration(
-  timestamp: string,
-  maxAgeMs: number
-): void {
-
-  if (!timestamp) {
-    throw new Error("Missing timestamp");
+function loadKeys(): JonahKeyStore {
+  const raw = process.env.JONAH_KEYS;
+  if (!raw) {
+    throw new Error("JONAH_KEYS not defined");
   }
 
-  if (!maxAgeMs) {
-    throw new Error("Missing max_age_ms");
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid JONAH_KEYS format");
+  }
+}
+
+export function getActiveKey() {
+  const keyStore = loadKeys();
+  const activeId = process.env.JONAH_ACTIVE_KEY_ID;
+
+  if (!activeId) {
+    throw new Error("JONAH_ACTIVE_KEY_ID not defined");
   }
 
-  if (maxAgeMs > MAX_ALLOWED_AGE_MS) {
-    throw new Error("max_age_ms exceeds allowed limit");
+  const secret = keyStore[activeId];
+  if (!secret) {
+    throw new Error(`Active key '${activeId}' not found in JONAH_KEYS`);
   }
 
-  const requestTime = new Date(timestamp);
+  return {
+    keyId: activeId,
+    secret
+  };
+}
 
-  if (isNaN(requestTime.getTime())) {
-    throw new Error("Invalid RFC3339 timestamp");
+export function getKeyById(keyId: string) {
+  const keyStore = loadKeys();
+  const secret = keyStore[keyId];
+
+  if (!secret) {
+    throw new Error(`Key '${keyId}' not found`);
   }
 
-  const now = new Date();
-  const ageMs = now.getTime() - requestTime.getTime();
-
-  if (ageMs < -MAX_FUTURE_DRIFT_MS) {
-    throw new Error("Timestamp too far in future");
-  }
-
-  if (ageMs > maxAgeMs) {
-    throw new Error("Signature expired");
-  }
+  return secret;
 }
