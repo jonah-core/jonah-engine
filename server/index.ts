@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import Redis from "ioredis";
 import crypto from "crypto";
 import { verifyAuditRecord } from "./core/audit";
+import { evaluateGovernance } from "./core/governance";
 
 dotenv.config();
 
@@ -27,15 +28,24 @@ app.get("/health", (_req, res) => {
 });
 
 /**
- * PRODUCTION EVALUATE ENDPOINT
+ * PRODUCTION EVALUATE WITH GOVERNANCE ENFORCEMENT
  */
 app.post("/evaluate", async (req, res) => {
   try {
-    const payload = req.body;
+    const inputPayload = req.body;
 
-    if (!payload || typeof payload !== "object") {
+    if (!inputPayload || typeof inputPayload !== "object") {
       return res.status(400).json({ error: "Invalid payload" });
     }
+
+    // 🔐 Governance Enforcement
+    const governance = evaluateGovernance(inputPayload);
+
+    const payload = {
+      ...inputPayload,
+      governanceScore: governance.governanceScore,
+      governanceFlags: governance.flags
+    };
 
     const evaluationId = crypto.randomUUID();
     const previousHash =
@@ -62,9 +72,11 @@ app.post("/evaluate", async (req, res) => {
     return res.json({
       evaluationId,
       hash,
-      signatureVersion: ACTIVE_KEY_ID
+      signatureVersion: ACTIVE_KEY_ID,
+      governanceScore: governance.governanceScore,
+      governanceFlags: governance.flags
     });
-  } catch (err) {
+  } catch {
     return res.status(500).json({ error: "Evaluation failed" });
   }
 });
