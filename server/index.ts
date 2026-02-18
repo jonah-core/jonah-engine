@@ -127,3 +127,31 @@ app.get("/health", async (_req, res) => {
     replay_protection: true,
     rate_limit: true,
     audit_chain: true,
+    version: "1.4.0"
+  });
+});
+
+/* ==============================
+   EVALUATE
+============================== */
+
+app.post("/evaluate", async (req, res) => {
+  try {
+    const {
+      epistemic,
+      structural,
+      risk,
+      ethical,
+      timestamp,
+      max_age_ms,
+      nonce
+    } = req.body;
+
+    validateTimestamp(timestamp, max_age_ms);
+    await enforceReplayProtection(nonce, max_age_ms);
+    await enforceRateLimit(req.ip);
+
+    const input: EvaluationInput = {
+      epistemic,
+      structural,
+      risk,
