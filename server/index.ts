@@ -8,8 +8,11 @@ import { computeScore, EvaluationInput } from "./core/kernel";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+app.use(cors());
+app.use(express.json());
+
 /* ==============================
-   REDIS INITIALIZATION
+   REDIS
 ============================== */
 
 const redis = new Redis(process.env.REDIS_URL || "");
@@ -23,13 +26,6 @@ const MAX_FUTURE_DRIFT_MS = 5000;
 
 const RATE_LIMIT_WINDOW_MS = 60000;
 const RATE_LIMIT_MAX = 60;
-
-/* ==============================
-   MIDDLEWARE
-============================== */
-
-app.use(cors());
-app.use(express.json());
 
 /* ==============================
    UTILITIES
@@ -61,10 +57,12 @@ function validateTimestamp(timestamp: string, maxAgeMs: number) {
 async function enforceReplayProtection(nonce: string, maxAgeMs: number) {
   if (!nonce) throw new Error("Missing nonce");
 
-  const exists = await redis.get(`nonce:${nonce}`);
+  const key = `nonce:${nonce}`;
+  const exists = await redis.get(key);
+
   if (exists) throw new Error("Replay detected");
 
-  await redis.set(`nonce:${nonce}`, "1", "PX", maxAgeMs);
+  await redis.set(key, "1", "PX", maxAgeMs);
 }
 
 async function enforceRateLimit(ip: string) {
@@ -80,10 +78,6 @@ async function enforceRateLimit(ip: string) {
   }
 }
 
-/* ==============================
-   CANONICAL JSON (DETERMINISTIC)
-============================== */
-
 function canonicalStringify(obj: any): string {
   return JSON.stringify(obj, Object.keys(obj).sort());
 }
@@ -92,13 +86,44 @@ function sha256(data: string): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-/* ==============================
-   AUDIT CHAIN LOGGING
-============================== */
-
 async function writeAuditLog(payload: any, result: any) {
   const id = uuidv4();
   const timestamp = new Date().toISOString();
 
   const canonicalPayload = canonicalStringify(payload);
-  const canonicalResult = canonicalStringify(re
+  const canonicalResult = canonicalStringify(result);
+
+  const previousHash =
+    (await redis.lindex("audit:chain", 0)) || "GENESIS";
+
+  const combined =
+    previousHash + canonicalPayload + canonicalResult + timestamp;
+
+  const currentHash = sha256(combined);
+
+  const record = {
+    id,
+    timestamp,
+    payload,
+    result,
+    previous_hash: previousHash,
+    hash: currentHash
+  };
+
+  await redis.lpush("audit:chain", currentHash);
+  await redis.lpush("audit:log", JSON.stringify(record));
+  await redis.ltrim("audit:chain", 0, 999);
+  await redis.ltrim("audit:log", 0, 999);
+}
+
+/* ==============================
+   HEALTH
+============================== */
+
+app.get("/health", async (_req, res) => {
+  res.json({
+    status: "JONAH ACTIVE",
+    redis: redis.status === "ready",
+    replay_protection: true,
+    rate_limit: true,
+    audit_chain: true,
