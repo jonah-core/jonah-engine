@@ -154,4 +154,8 @@ app.post("/evaluate", async (req, res) => {
     const input: EvaluationInput = {
       epistemic,
       structural,
-      risk,
+      risk,{
+}
+(
+)
+
