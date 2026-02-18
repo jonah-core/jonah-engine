@@ -1,135 +1,106 @@
 import express from "express";
 import crypto from "crypto";
 import Redis from "ioredis";
-import { evaluateGovernance } from "./core/governance";
-import { verifyAuditRecord } from "./core/audit";
 
 const app = express();
 app.use(express.json());
 
-const redis = new Redis(process.env.REDIS_URL as string);
+const redis = new Redis(process.env.REDIS_URL!);
 
-// ─────────────────────────────
-// CONFIG
-// ─────────────────────────────
+const SOVEREIGN_MODE = process.env.SOVEREIGN_MODE === "true";
 
-const ACTIVE_KEY_ID = process.env.JONAH_ACTIVE_KEY_ID as string;
-const KEY_MAP = JSON.parse(process.env.JONAH_KEYS as string);
+/* =========================
+   GOVERNANCE ENGINE
+========================= */
 
-// ─────────────────────────────
-// UTIL
-// ─────────────────────────────
+function calculateGovernance(score: number) {
+  let governanceScore = 100;
+  let governanceFlags: string[] = [];
+  let riskLevel = "low";
 
-function computeHmac(payload: any, previousHash: string) {
-  const secret = KEY_MAP[ACTIVE_KEY_ID];
+  if (score < 30) {
+    governanceScore = 60;
+    governanceFlags.push("critical_performance_indicator");
+    riskLevel = "high";
+  } else if (score < 70) {
+    governanceScore = 80;
+    governanceFlags.push("medium_performance_indicator");
+    riskLevel = "medium";
+  } else if (score < 95) {
+    governanceScore = 90;
+    governanceFlags.push("low_performance_indicator");
+    riskLevel = "low";
+  }
 
-  return crypto
+  // Sovereign escalation layer
+  if (SOVEREIGN_MODE) {
+    if (riskLevel === "high") {
+      governanceFlags.push("sovereign_intervention_required");
+      governanceScore -= 10;
+    }
+
+    if (riskLevel === "medium") {
+      governanceFlags.push("sovereign_monitoring");
+    }
+  }
+
+  return { governanceScore, governanceFlags, riskLevel };
+}
+
+/* =========================
+   EVALUATE ENDPOINT
+========================= */
+
+app.post("/evaluate", async (req, res) => {
+  const { user, score } = req.body;
+
+  const evaluationId = crypto.randomUUID();
+
+  const payload = JSON.stringify({ user, score });
+  const previousHash = "0000000000000000";
+  const activeKeyId = process.env.JONAH_ACTIVE_KEY_ID!;
+  const keys = JSON.parse(process.env.JONAH_KEYS!);
+  const secret = keys[activeKeyId];
+
+  const hash = crypto
     .createHmac("sha256", secret)
-    .update(JSON.stringify(payload) + previousHash)
+    .update(payload + previousHash)
     .digest("hex");
-}
 
-async function getPreviousHash(): Promise<string> {
-  const lastId = await redis.get("audit:last");
+  const governance = calculateGovernance(score);
 
-  if (!lastId) return "0000000000000000";
+  const record = {
+    evaluationId,
+    hash,
+    previousHash,
+    signatureVersion: activeKeyId,
+    ...governance,
+  };
 
-  const lastRecord = await redis.get(`audit:${lastId}`);
-  if (!lastRecord) return "0000000000000000";
+  await redis.set(`audit:${evaluationId}`, JSON.stringify(record));
 
-  return JSON.parse(lastRecord).hash;
-}
+  res.json(record);
+});
 
-// ─────────────────────────────
-// HEALTH
-// ─────────────────────────────
+/* =========================
+   VERIFY ENDPOINT
+========================= */
 
-app.get("/health", (_, res) => {
+app.get("/verify/:id", async (req, res) => {
+  const record = await redis.get(`audit:${req.params.id}`);
+  if (!record) return res.status(404).json({ error: "Not found" });
+
+  res.json(JSON.parse(record));
+});
+
+/* =========================
+   HEALTH
+========================= */
+
+app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// ─────────────────────────────
-// EVALUATE
-// ─────────────────────────────
-
-app.post("/evaluate", async (req, res) => {
-  try {
-    const payload = req.body;
-
-    const governance = evaluateGovernance(payload);
-
-    const previousHash = await getPreviousHash();
-
-    const hash = computeHmac(payload, previousHash);
-
-    const evaluationId = crypto.randomUUID();
-
-    const record = {
-      id: evaluationId,
-      payload,
-      hash,
-      previousHash,
-      signatureVersion: ACTIVE_KEY_ID,
-      governanceScore: governance.governanceScore,
-      governanceFlags: governance.flags,
-      riskLevel: governance.riskLevel,
-      timestamp: Date.now()
-    };
-
-    await redis.set(`audit:${evaluationId}`, JSON.stringify(record));
-    await redis.set("audit:last", evaluationId);
-
-    res.json({
-      evaluationId,
-      hash,
-      signatureVersion: ACTIVE_KEY_ID,
-      governanceScore: governance.governanceScore,
-      governanceFlags: governance.flags,
-      riskLevel: governance.riskLevel
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: "Evaluation failed" });
-  }
-});
-
-// ─────────────────────────────
-// VERIFY
-// ─────────────────────────────
-
-app.get("/verify/:id", async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const record = await redis.get(`audit:${id}`);
-    if (!record) {
-      return res.status(404).json({ error: "Not found" });
-    }
-
-    const parsed = JSON.parse(record);
-
-    const result = verifyAuditRecord(
-      id,
-      parsed.payload,
-      parsed.hash,
-      parsed.previousHash,
-      KEY_MAP[parsed.signatureVersion]
-    );
-
-    res.json({
-      ...result,
-      signatureVersion: parsed.signatureVersion
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: "Verification failed" });
-  }
-});
-
-// ─────────────────────────────
-
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, () => {
-  console.log(`JONAH Engine running on port ${PORT}`);
+app.listen(8080, () => {
+  console.log("JONAH Engine running on port 8080");
 });
