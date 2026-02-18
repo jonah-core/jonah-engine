@@ -1,222 +1,56 @@
 import express from "express";
-import cors from "cors";
+import dotenv from "dotenv";
 import Redis from "ioredis";
-import crypto from "crypto";
-import { v4 as uuidv4 } from "uuid";
-import { computeScore, EvaluationInput } from "./core/kernel";
+import { verifyAuditRecord } from "./core/audit";
+
+dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 8080;
-
-app.use(cors());
 app.use(express.json());
 
-/* ==============================
-   REDIS
-============================== */
+const redis = new Redis(process.env.REDIS_URL as string);
 
-const redis = new Redis(process.env.REDIS_URL || "");
-
-/* ==============================
-   CONSTANTS
-============================== */
-
-const MAX_ALLOWED_AGE_MS = 60000;
-const MAX_FUTURE_DRIFT_MS = 5000;
-
-const RATE_LIMIT_WINDOW_MS = 60000;
-const RATE_LIMIT_MAX = 60;
-
-/* ==============================
-   UTILITIES
-============================== */
-
-function validateTimestamp(timestamp: string, maxAgeMs: number) {
-  if (!timestamp) throw new Error("Missing timestamp");
-
-  const requestTime = new Date(timestamp).getTime();
-  if (isNaN(requestTime)) throw new Error("Invalid timestamp format");
-
-  const now = Date.now();
-
-  if (requestTime - now > MAX_FUTURE_DRIFT_MS) {
-    throw new Error("Timestamp too far in future");
-  }
-
-  const age = now - requestTime;
-
-  if (age > maxAgeMs) {
-    throw new Error("Signature expired");
-  }
-
-  if (maxAgeMs > MAX_ALLOWED_AGE_MS) {
-    throw new Error("max_age_ms exceeds allowed limit");
-  }
-}
-
-async function enforceReplayProtection(nonce: string, maxAgeMs: number) {
-  if (!nonce) throw new Error("Missing nonce");
-
-  const key = `nonce:${nonce}`;
-  const exists = await redis.get(key);
-
-  if (exists) throw new Error("Replay detected");
-
-  await redis.set(key, "1", "PX", maxAgeMs);
-}
-
-async function enforceRateLimit(ip: string) {
-  const key = `rate:${ip}`;
-  const current = await redis.incr(key);
-
-  if (current === 1) {
-    await redis.pexpire(key, RATE_LIMIT_WINDOW_MS);
-  }
-
-  if (current > RATE_LIMIT_MAX) {
-    throw new Error("Rate limit exceeded");
-  }
-}
-
-function canonicalStringify(obj: any): string {
-  return JSON.stringify(obj);
-}
-
-function sha256(data: string): string {
-  return crypto.createHash("sha256").update(data).digest("hex");
-}
-
-/* ==============================
-   HMAC VERIFICATION (FINAL)
-============================== */
-
-function verifyHmacSignature(req: any, rawBody: string) {
-  const activeKeyId = process.env.JONAH_ACTIVE_KEY_ID;
-  const keysRaw = process.env.JONAH_KEYS;
-
-  if (!activeKeyId || !keysRaw) {
-    throw new Error("HMAC configuration missing");
-  }
-
-  const keys = JSON.parse(keysRaw);
-  const secret = keys[activeKeyId];
-
-  if (!secret) {
-    throw new Error("Active key not found");
-  }
-
-  const signature = req.get("x-jonah-signature");
-
-  if (!signature) {
-    throw new Error("Missing HMAC signature");
-  }
-
-  const computed = crypto
-    .createHmac("sha256", secret)
-    .update(rawBody)
-    .digest("hex");
-
-  if (computed !== signature) {
-    throw new Error("Invalid HMAC signature");
-  }
-}
-
-/* ==============================
-   AUDIT LOG CHAIN
-============================== */
-
-async function writeAuditLog(payload: any, result: any) {
-  const id = uuidv4();
-  const timestamp = new Date().toISOString();
-
-  const canonicalPayload = canonicalStringify(payload);
-  const canonicalResult = canonicalStringify(result);
-
-  const previousHash =
-    (await redis.lindex("audit:chain", 0)) || "GENESIS";
-
-  const combined =
-    previousHash + canonicalPayload + canonicalResult + timestamp;
-
-  const currentHash = sha256(combined);
-
-  const record = {
-    id,
-    timestamp,
-    payload,
-    result,
-    previous_hash: previousHash,
-    hash: currentHash
-  };
-
-  await redis.lpush("audit:chain", currentHash);
-  await redis.lpush("audit:log", JSON.stringify(record));
-  await redis.ltrim("audit:chain", 0, 999);
-  await redis.ltrim("audit:log", 0, 999);
-}
-
-/* ==============================
-   HEALTH
-============================== */
-
+/**
+ * Health check
+ */
 app.get("/health", (_req, res) => {
-  res.json({
-    status: "JONAH ACTIVE",
-    redis: redis.status === "ready",
-    replay_protection: true,
-    rate_limit: true,
-    audit_chain: true,
-    hmac_enabled: true,
-    version: "2.0.0"
-  });
+  res.json({ status: "ok" });
 });
 
-/* ==============================
-   EVALUATE
-============================== */
+/**
+ * Verify audit chain integrity
+ */
+app.get("/verify/:id", async (req, res) => {
+  const { id } = req.params;
 
-app.post("/evaluate", async (req, res) => {
   try {
-    const rawBody = JSON.stringify(req.body);
+    const record = await redis.get(`audit:${id}`);
 
-    // 🔐 VERIFY HMAC FIRST
-    verifyHmacSignature(req, rawBody);
+    if (!record) {
+      return res.status(404).json({ error: "Not found" });
+    }
 
-    const {
-      epistemic,
-      structural,
-      risk,
-      ethical,
-      timestamp,
-      max_age_ms,
-      nonce
-    } = req.body;
+    const parsed = JSON.parse(record);
 
-    validateTimestamp(timestamp, max_age_ms);
-    await enforceReplayProtection(nonce, max_age_ms);
-    await enforceRateLimit(req.ip);
+    const result = verifyAuditRecord(
+      id,
+      parsed.payload,
+      parsed.hash,
+      parsed.previousHash,
+      process.env.HMAC_SECRET as string
+    );
 
-    const input: EvaluationInput = {
-      epistemic,
-      structural,
-      risk,
-      ethical
-    };
+    return res.json({
+      ...result,
+      signatureVersion: parsed.signatureVersion
+    });
 
-    const result = computeScore(input);
-
-    await writeAuditLog(req.body, result);
-
-    res.json(result);
-
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: "Verification failed" });
   }
 });
 
-/* ==============================
-   START SERVER
-============================== */
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`JONAH Engine running on port ${PORT}`);
