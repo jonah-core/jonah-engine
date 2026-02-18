@@ -154,8 +154,26 @@ app.post("/evaluate", async (req, res) => {
     const input: EvaluationInput = {
       epistemic,
       structural,
-      risk,{
-}
-(
-)
+      risk,
+      ethical
+    };
 
+    const result = computeScore(input);
+
+    await writeAuditLog(req.body, result);
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({
+      error: err.message || "Unknown error"
+    });
+  }
+});
+
+/* ==============================
+   START
+============================== */
+
+app.listen(PORT, () => {
+  console.log(`JONAH Engine running on port ${PORT}`);
+});
