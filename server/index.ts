@@ -14,6 +14,28 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
+/**
+ * TEMPORARY: inject test record into Redis
+ */
+app.post("/inject", async (req, res) => {
+  const { id, payload, hash, previousHash, signatureVersion } = req.body;
+
+  if (!id || !payload || !hash || !previousHash || !signatureVersion) {
+    return res.status(400).json({ error: "Invalid body" });
+  }
+
+  const record = {
+    payload,
+    hash,
+    previousHash,
+    signatureVersion
+  };
+
+  await redis.set(`audit:${id}`, JSON.stringify(record));
+
+  return res.json({ injected: true });
+});
+
 app.get("/verify/:id", async (req, res) => {
   const { id } = req.params;
 
@@ -35,7 +57,7 @@ app.get("/verify/:id", async (req, res) => {
     );
 
     return res.json(result);
-  } catch (error) {
+  } catch {
     return res.status(500).json({ error: "Verification failed" });
   }
 });
