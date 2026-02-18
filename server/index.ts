@@ -9,18 +9,18 @@ const app = express();
 app.use(express.json());
 
 /* ============================================================
-   ENV VALIDATION
+   REDIS CONNECTION (STANDARDIZED)
 ============================================================ */
 
-if (!process.env.REDIS_URL) {
-  console.error("FATAL: REDIS_URL is not defined.");
+if (!process.env.REDIS_PUBLIC_URL) {
+  console.error("FATAL: REDIS_PUBLIC_URL is not defined.");
   process.exit(1);
 }
 
-const redis = new Redis(process.env.REDIS_URL);
+const redis = new Redis(process.env.REDIS_PUBLIC_URL);
 
 /* ============================================================
-   SOVEREIGN MODE FLAG
+   SOVEREIGN MODE
 ============================================================ */
 
 const SOVEREIGN_MODE = process.env.SOVEREIGN_MODE === "true";
@@ -34,40 +34,24 @@ app.get("/health", (req, res) => {
 });
 
 /* ============================================================
-   SOVEREIGN ESCALATION FRAMEWORK
-   Deterministic – Non Experimental
+   ESCALATION ENGINE
 ============================================================ */
 
 function determineEscalation(governanceScore: number) {
   if (governanceScore >= 80) {
-    return {
-      level: 0,
-      action: "none",
-    };
+    return { level: 0, action: "none" };
   }
-
   if (governanceScore >= 60) {
-    return {
-      level: 1,
-      action: "performance_monitoring",
-    };
+    return { level: 1, action: "performance_monitoring" };
   }
-
   if (governanceScore >= 40) {
-    return {
-      level: 2,
-      action: "critical_alert",
-    };
+    return { level: 2, action: "critical_alert" };
   }
-
-  return {
-    level: 3,
-    action: "sovereign_intervention_required",
-  };
+  return { level: 3, action: "sovereign_intervention_required" };
 }
 
 /* ============================================================
-   EVALUATE ENDPOINT
+   EVALUATE
 ============================================================ */
 
 app.post("/evaluate", async (req, res) => {
@@ -81,13 +65,11 @@ app.post("/evaluate", async (req, res) => {
       });
     }
 
-    // Governance score calculation (simple deterministic model)
     const governanceScore = Math.max(0, Math.min(100, score));
-
     const escalation = determineEscalation(governanceScore);
 
-    const sovereignActive =
-      escalation.level === 3 && SOVEREIGN_MODE === true;
+    const sovereignActivated =
+      escalation.level === 3 && SOVEREIGN_MODE;
 
     const evaluationId = crypto.randomUUID();
 
@@ -97,11 +79,10 @@ app.post("/evaluate", async (req, res) => {
       governanceScore,
       escalationLevel: escalation.level,
       escalationAction: escalation.action,
-      sovereignEscalationActivated: sovereignActive,
+      sovereignEscalationActivated: sovereignActivated,
       timestamp: new Date().toISOString(),
     };
 
-    // Persist to Redis
     await redis.set(
       `audit:${evaluationId}`,
       JSON.stringify(payload)
@@ -110,8 +91,9 @@ app.post("/evaluate", async (req, res) => {
     await redis.set("audit:last", evaluationId);
 
     res.json(payload);
-  } catch (error) {
-    console.error("Evaluation error:", error);
+
+  } catch (err) {
+    console.error("Redis / Evaluation error:", err);
     res.status(500).json({
       status: "error",
       message: "Internal server error",
