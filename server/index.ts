@@ -80,77 +80,25 @@ async function enforceRateLimit(ip: string) {
   }
 }
 
-async function writeAuditLog(payload: any, result: any) {
-  const id = uuidv4();
-  const record = {
-    id,
-    timestamp: new Date().toISOString(),
-    payload,
-    result
-  };
+/* ==============================
+   CANONICAL JSON (DETERMINISTIC)
+============================== */
 
-  await redis.lpush("audit:log", JSON.stringify(record));
-  await redis.ltrim("audit:log", 0, 999);
+function canonicalStringify(obj: any): string {
+  return JSON.stringify(obj, Object.keys(obj).sort());
+}
+
+function sha256(data: string): string {
+  return crypto.createHash("sha256").update(data).digest("hex");
 }
 
 /* ==============================
-   HEALTH ENDPOINT
+   AUDIT CHAIN LOGGING
 ============================== */
 
-app.get("/health", async (_req, res) => {
-  const redisOk = redis.status === "ready";
+async function writeAuditLog(payload: any, result: any) {
+  const id = uuidv4();
+  const timestamp = new Date().toISOString();
 
-  res.json({
-    status: "JONAH ACTIVE",
-    redis: redisOk,
-    replay_protection: true,
-    rate_limit: true,
-    audit: true,
-    version: "1.4.0"
-  });
-});
-
-/* ==============================
-   EVALUATION ENDPOINT
-============================== */
-
-app.post("/evaluate", async (req, res) => {
-  try {
-    const {
-      epistemic,
-      structural,
-      risk,
-      ethical,
-      timestamp,
-      max_age_ms,
-      nonce
-    } = req.body;
-
-    validateTimestamp(timestamp, max_age_ms);
-    await enforceReplayProtection(nonce, max_age_ms);
-    await enforceRateLimit(req.ip);
-
-    const input: EvaluationInput = {
-      epistemic,
-      structural,
-      risk,
-      ethical
-    };
-
-    const result = computeScore(input);
-
-    await writeAuditLog(req.body, result);
-
-    res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-/* ==============================
-   START SERVER
-============================== */
-
-app.listen(PORT, () => {
-  console.log(`JONAH Engine running on port ${PORT}`);
-});
+  const canonicalPayload = canonicalStringify(payload);
+  const canonicalResult = canonicalStringify(re
