@@ -10,16 +10,10 @@ app.use(express.json());
 
 const redis = new Redis(process.env.REDIS_URL as string);
 
-/**
- * Health check
- */
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-/**
- * Verify audit chain integrity
- */
 app.get("/verify/:id", async (req, res) => {
   const { id } = req.params;
 
@@ -37,20 +31,16 @@ app.get("/verify/:id", async (req, res) => {
       parsed.payload,
       parsed.hash,
       parsed.previousHash,
-      process.env.HMAC_SECRET as string
+      parsed.signatureVersion
     );
 
-    return res.json({
-      ...result,
-      signatureVersion: parsed.signatureVersion
-    });
-
+    return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: "Verification failed" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
   console.log(`JONAH Engine running on port ${PORT}`);
